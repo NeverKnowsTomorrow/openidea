@@ -581,7 +581,24 @@ function CapabilityList({ plugin, busy }: { plugin: PluginInfo; busy: boolean })
           key={c.id}
           cap={c}
           program={
-            c.id.startsWith("process:") && <ProgramPermission plugin={plugin} cap={c} disabled={busy || !confirmed} />
+            c.id.startsWith("process:") ? (
+              <ProgramPermission plugin={plugin} cap={c} disabled={busy || !confirmed} />
+            ) : c.id === "java.agent" && plugin.javaAgent ? (
+              <>
+                <p className={styles.capabilityDescription}>
+                  <span className={styles.mono}>{plugin.javaAgent.fileName}</span>
+                  {plugin.javaAgent.args ? ` ${plugin.javaAgent.args}` : ""}
+                </p>
+                {c.granted && !plugin.javaAgent.approved && (
+                  <p className={styles.error} role="alert">
+                    <T>
+                      The agent jar changed since you approved it. Uncheck java.agent, then check it again to approve
+                      the new jar.
+                    </T>
+                  </p>
+                )}
+              </>
+            ) : undefined
           }
         >
           <Checkbox

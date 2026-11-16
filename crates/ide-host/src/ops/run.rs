@@ -221,6 +221,13 @@ pub fn apply_settings(host: &Host, window: &str, configs: Vec<RunConfig>) -> Ide
         .collect()
 }
 
+/// Applies the Java agents of granted plugins to a configuration before a
+/// debugger starts a JVM. Run uses the same logic through [`start_inner`].
+pub fn apply_plugin_java_agents(host: &Host, config: RunConfig) -> IdeResult<RunConfig> {
+    let Some(plugins) = host.plugin_host() else { return Ok(config) };
+    Ok(plugins.apply_java_agents(&config).0)
+}
+
 pub async fn start(host: &Host, window: &str, config: RunConfig, on_output: Emit<OutputChunk>) -> IdeResult<RunInfo> {
     start_request(host, window, config, on_output, None).await
 }
@@ -271,6 +278,13 @@ async fn start_inner(
     let project = host.project(window)?;
     if config.extras.target.is_none() {
         config.extras.target = ide_sdk::apply::run_target(&config, &project.settings.effective()).map(str::to_owned);
+    }
+    if let Some(plugins) = host.plugin_host() {
+        let (patched, notice) = plugins.apply_java_agents(&config);
+        config = patched;
+        if let Some(notice) = notice {
+            on_output(OutputChunk::System { text: format!("{notice}\n") });
+        }
     }
     if config.detected
         && config.id.starts_with(ide_run::EXTERNAL_PREFIX)

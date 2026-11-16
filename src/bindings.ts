@@ -884,6 +884,7 @@ export const commands = {
 	termAvailableShells: () => __TAURI_INVOKE<string[]>("term_available_shells"),
 	/**  Detected configs followed by user-defined ones (user ids win on conflict). */
 	runConfigs: () => typedError<RunConfig_Serialize[], IdeError>(__TAURI_INVOKE("run_configs")),
+	runApplyPluginJavaAgents: (config: RunConfig_Deserialize) => typedError<RunConfig_Serialize, IdeError>(__TAURI_INVOKE("run_apply_plugin_java_agents", { config })),
 	runDotnetResolve: (config: RunConfig_Deserialize, debug: boolean) => typedError<RunConfig_Serialize, IdeError>(__TAURI_INVOKE("run_dotnet_resolve", { config, debug })),
 	runSaveConfigs: (configs: RunConfig_Deserialize[], removedDetectedIds: string[] | null) => typedError<null, IdeError>(__TAURI_INVOKE("run_save_configs", { configs, removedDetectedIds })),
 	/**  Temporary configurations as they are kept between sessions: without what settings derived. */
@@ -8665,6 +8666,8 @@ export type PluginInfo = {
 	homepage: string | null,
 	changeNotes: string | null,
 	icon: PluginIcon | null,
+	/**  The Java agent this plugin contributes, for Settings › Plugins. */
+	javaAgent: PluginJavaAgent | null,
 	source: PluginSource,
 	/**  Package directory. */
 	path: IpcPath,
@@ -8697,6 +8700,16 @@ export type PluginInfo = {
 	dependents: DependentInfo[],
 	/**  `[[extension-points]]` this plugin declares while it is live. */
 	extensionPoints: ExtensionPointInfo[],
+};
+
+/**  A Java agent a plugin contributes through `[[contributes.javaAgents]]`. */
+export type PluginJavaAgent = {
+	/**  File name shown next to the `java.agent` permission. */
+	fileName: string,
+	/**  Optional argument passed after `=` in `-javaagent:path=args`. */
+	args: string | null,
+	/**  The jar still matches the hash approved with the `java.agent` grant. */
+	approved: boolean,
 };
 
 /**

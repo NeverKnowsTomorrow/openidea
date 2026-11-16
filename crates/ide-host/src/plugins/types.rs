@@ -10,6 +10,18 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::collections::BTreeMap;
 
+/// A Java agent a plugin contributes through `[[contributes.javaAgents]]`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginJavaAgent {
+    /// File name shown next to the `java.agent` permission.
+    pub file_name: String,
+    /// Optional argument passed after `=` in `-javaagent:path=args`.
+    pub args: Option<String>,
+    /// The jar still matches the hash approved with the `java.agent` grant.
+    pub approved: bool,
+}
+
 /// A line a view's `process` body printed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +78,8 @@ pub struct PluginInfo {
     pub homepage: Option<String>,
     pub change_notes: Option<String>,
     pub icon: Option<PluginIcon>,
+    /// The Java agent this plugin contributes, for Settings › Plugins.
+    pub java_agent: Option<PluginJavaAgent>,
     pub source: PluginSource,
     /// Package directory.
     pub path: ide_core::IpcPath,

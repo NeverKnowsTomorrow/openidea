@@ -43,6 +43,17 @@ pub async fn run_application_publish(
     ide_host::ops::run::run_application_publish(&state.host, window.label(), config, class_paths, main_class).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn run_apply_plugin_java_agents(
+    window: Window,
+    state: State<'_, AppState>,
+    config: RunConfig,
+) -> IdeResult<RunConfig> {
+    let _ = window;
+    ide_host::ops::run::apply_plugin_java_agents(&state.host, config)
+}
+
 /// Detected configs followed by user-defined ones (user ids win on conflict).
 #[tauri::command]
 #[specta::specta]

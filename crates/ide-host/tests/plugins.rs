@@ -7040,3 +7040,63 @@ fn a_freshly_installed_plugin_gets_the_post_install_settings_event() {
         "freshly installed plugin got no post-install event: {received}"
     );
 }
+
+#[test]
+fn java_agent_contribution_grants_and_injects_once() {
+    let f = fixture(Limits::default());
+    let info = f.host.install_from_dir(&sample("java-agent"), &Consent::all()).unwrap();
+    assert_eq!(info.java_agent.as_ref().unwrap().file_name, "agent.jar");
+    assert_eq!(info.java_agent.as_ref().unwrap().args.as_deref(), Some("--marker=1"));
+    let capability = info.capabilities.iter().find(|cap| cap.id == "java.agent").unwrap();
+    assert!(capability.optional);
+    assert!(capability.granted);
+    let config = ide_run::RunConfig {
+        id: "app".into(),
+        name: "App".into(),
+        kind: "application".into(),
+        command: "java".into(),
+        args: vec!["-Xmx512m".into(), "-cp".into(), "${classpath}".into(), "a.App".into()],
+        cwd: None,
+        env: Default::default(),
+        detected: false,
+        is_test: false,
+        debug_adapter: None,
+        allow_parallel: false,
+        extras: Default::default(),
+    };
+    let (patched, notice) = f.host.apply_java_agents(&config);
+    assert!(notice.is_none());
+    let agent = patched.args.iter().find(|arg| arg.starts_with("-javaagent:")).expect("agent argument");
+    assert!(agent.ends_with("/agent.jar=--marker=1"));
+    assert_eq!(patched.args.iter().filter(|arg| arg.starts_with("-javaagent:")).count(), 1);
+}
+
+#[test]
+fn changed_java_agent_and_remote_projects_are_skipped() {
+    let f = fixture(Limits::default());
+    let info = f.host.install_from_dir(&sample("java-agent"), &Consent::all()).unwrap();
+    let dir = info.path.0.clone();
+    std::fs::write(dir.join("agent/agent.jar"), b"changed").unwrap();
+    let config = ide_run::RunConfig {
+        id: "app".into(),
+        name: "App".into(),
+        kind: "application".into(),
+        command: "java".into(),
+        args: vec!["-cp".into(), "cp".into(), "a.App".into()],
+        cwd: None,
+        env: Default::default(),
+        detected: false,
+        is_test: false,
+        debug_adapter: None,
+        allow_parallel: false,
+        extras: Default::default(),
+    };
+    let (patched, notice) = f.host.apply_java_agents(&config);
+    assert!(notice.unwrap().contains("changed"));
+    assert!(!patched.args.iter().any(|arg| arg.starts_with("-javaagent:")));
+
+    let mut remote = config;
+    remote.extras.target = Some("ssh-dev".into());
+    let (_, notice) = f.host.apply_java_agents(&remote);
+    assert!(notice.unwrap().contains("remote"));
+}

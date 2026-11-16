@@ -1,0 +1,9 @@
+id = "java-agent-fixture"
+name = "Java Agent Fixture"
+version = "1.0.0"
+description = "Contributes one Java agent for the host tests."
+engines.openidea = "^1.9"
+
+[[contributes.javaAgents]]
+path = "agent/agent.jar"
+args = "--marker=1"

@@ -267,7 +267,7 @@ impl Ledger {
             if cap == &Capability::NetAsk {
                 grant.net_hosts.clear();
             }
-            if let Capability::Process(_) = cap {
+            if matches!(cap, Capability::Process(_) | Capability::JvmAgent) {
                 grant.binaries.remove(&s);
                 for binaries in grant.project_binaries.values_mut() {
                     binaries.remove(&s);
@@ -294,6 +294,32 @@ impl Ledger {
     pub fn set_binary(&mut self, subject: &Subject, cap: &Capability, binary: BinaryGrant) {
         if let Some(grant) = self.grants.get_mut(subject) {
             grant.binaries.insert(cap.to_string(), binary);
+        }
+    }
+
+    /// Pins the jar the user approved for a `java.agent` grant.
+    pub fn set_java_agent(&mut self, subject: &Subject, path: &Path, hash: String) {
+        if let Some(grant) = self.grants.get_mut(subject) {
+            grant.binaries.insert(Capability::JvmAgent.to_string(), BinaryGrant { path: path.into(), hash });
+        }
+    }
+
+    /// Checks a `java.agent` grant at launch: the jar must be the one approved
+    /// since the permission was last granted.
+    pub fn check_java_agent(&self, subject: &Subject) -> Result<PathBuf, String> {
+        let cap = Capability::JvmAgent;
+        let grant = self.grants.get(subject).ok_or_else(|| format!("{cap} was not granted"))?;
+        if !grant.has(&cap) {
+            return Err(format!("{cap} was not granted"));
+        }
+        let pin = grant.binaries.get(&cap.to_string()).ok_or_else(|| format!("{cap}: no jar was approved"))?;
+        match file_hash(&pin.path) {
+            Ok(hash) if hash == pin.hash => Ok(pin.path.clone()),
+            Ok(_) => Err(format!(
+                "{} changed since it was approved for {cap}; confirm the plugin's permissions again",
+                pin.path.display()
+            )),
+            Err(e) => Err(format!("{}: {e}; confirm the plugin's permissions again", pin.path.display())),
         }
     }
 
@@ -637,6 +663,24 @@ mod tests {
         assert_eq!(l.check_binary(&r.subject, &cap).unwrap(), resolved);
         std::fs::write(&tool, "#!/bin/sh\necho evil\n").unwrap();
         assert!(l.check_binary(&r.subject, &cap).unwrap_err().contains("changed"));
+    }
+
+    #[test]
+    fn java_agents_are_pinned_by_hash_and_can_be_revoked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let jar = tmp.path().join("agent.jar");
+        std::fs::write(&jar, "v1").unwrap();
+        let mut l = Ledger::in_memory();
+        let r = req("1.0.0", "h", &[], &["java.agent"]);
+        l.confirm(&r, &caps(&["java.agent"]), BTreeMap::new());
+        let cap = Capability::JvmAgent;
+        assert!(l.check_java_agent(&r.subject).unwrap_err().contains("no jar"));
+        l.set_java_agent(&r.subject, &jar, file_hash(&jar).unwrap());
+        assert_eq!(l.check_java_agent(&r.subject).unwrap(), jar);
+        std::fs::write(&jar, "v2").unwrap();
+        assert!(l.check_java_agent(&r.subject).unwrap_err().contains("changed"));
+        assert!(l.set(&r.subject, &cap, false));
+        assert!(l.check_java_agent(&r.subject).unwrap_err().contains("not granted"));
     }
 
     /// A program found as a link stays the link: multicall shims (rustup,

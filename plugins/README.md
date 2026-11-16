@@ -159,6 +159,7 @@ work), but 0.1 code no longer runs: rebuild it against the 1.0 SDK.
 | `fileTemplates`     | `id`, `name`, `extension`, `path`; API 1.3: `fileName`, `variables = [{ name, prompt }]` — New menu                                                                                                                                    | no            |
 | `commitChecks`      | `id`, `title` — a before-commit check in Commit Options (see _Commits_)                                                                                                                                                                | yes           |
 | `serverCommands`    | `server`, `command`, `run` — a language server's client command run by this plugin's command (API 1.9; see _Commands a server hands to the client_)                                                                                    |
+| `javaAgents`        | `path` (jar inside the package), `args?` — one per plugin; optional `java.agent` (API 1.9; see _Java agents_)                                                                                                                          | no            |
 
 A `viewItem.context` menu needs `view`, the id of one of the plugin's own
 views. It adds the commands to the right-click menu of the items in that
@@ -365,6 +366,7 @@ machine. Users can revoke optional capabilities in Settings › Plugins.
 | `ipc:<path>`        | high   | Local Unix sockets or Windows named pipes on the project machine; API 1.4                                                                                               |
 | `secrets`           | medium | `{{secret:<name>}}` in request headers, `host::secret_is_set`, `secret_set`, `secret_delete`                                                                            |
 | `clipboard`         | medium | `host::copy_to_clipboard` and the clipboard API in the plugin's web views                                                                                               |
+| `java.agent`        | high   | API 1.9: load the `[[contributes.javaAgents]]` jar into Java applications; the host pins the jar's hash at grant time and rechecks it before every launch               |
 
 `process:` capabilities are also derived from what the contributions start: a
 language's `language-servers` and `debugger` commands and a run detector's
@@ -442,6 +444,13 @@ matching SDK. Released 1.8 plugins keep working. New in 1.9:
 - **`[[contributes.editorPanels]]`** puts a web page at the right edge of every
   editor group, following its text editor through `openidea.editor` (a minimap,
   say). See _Editor panels_.
+- **`[[contributes.javaAgents]]`** adds one Java agent to Application, Spring
+  Boot and JAR Application launches, for Run and Debug. It is a high-risk,
+  optional `java.agent` capability: the user grants it, the host pins the jar's
+  content hash, and a changed jar is refused until the permission is granted
+  again. Local projects only; a remote launch prints one line in the Run
+  console and starts without the agent. Tests, Maven/Gradle goals, application
+  servers and remote debugging are not covered. See _Java agents_.
 
 ### API 1.8
 
@@ -1947,6 +1956,46 @@ Its `Log Probe: Open Stream` and `Log Probe: Try Undeclared Program` commands
 also ask the sandboxed page to open a tab, exercising the Wasm-to-page bridge;
 `Log Probe: Open From Code` opens one from the plugin's code.
 This extends the web bridge without changing released WIT signatures.
+
+### Java agents (API 1.9)
+
+A plugin can ask the host to put one agent on the JVM command line of the
+applications it starts:
+
+```toml
+[[contributes.javaAgents]]
+path = "agent/agent.jar"     # required, inside the plugin package
+args = "optional-arguments"  # optional
+```
+
+`javaAgents` is a workspace contribution. The manifest validator accepts at
+most one declaration per plugin and resolves `path` with the same rules as
+every other package path: it must be a file inside the package; a symlink that
+leaves the package, `..`, or an absolute path fails at install time. The jar is
+part of the package hash and the signed `.oiplugin`.
+
+The contribution derives an optional capability, `java.agent`, described as
+running code inside the Java applications the user starts. If the user refuses
+or revokes it, the rest of the plugin keeps working and the next launch has no
+agent.
+
+On grant the host records the jar's content hash in the grant ledger. Before
+each launch it checks the hash again: a jar that changed since approval is not
+loaded, and the user must grant `java.agent` again. The host appends one
+argument as a separate argv item, never through a shell:
+
+```text
+-javaagent:<absolute path>[=<args>]
+```
+
+It supports Application, Spring Boot and JAR Application configurations, for
+Run and Debug, after the configuration's VM options. An identical existing
+`-javaagent:` is not duplicated, and paths with spaces need no quoting.
+
+Remote projects are not supported in this version: the JVM runs on the server,
+so the host skips the agent and writes one line to the Run console. Maven and
+Gradle goals, application servers, tests and remote debugging are also outside
+this version.
 
 ### Runs, terminal sessions and test results (API 1.4)
 

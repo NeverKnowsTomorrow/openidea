@@ -357,6 +357,7 @@ async function startConfig(arg: unknown) {
     return;
   }
   if (isJavaDebuggable(config)) {
+    config = await call(commands.runApplyPluginJavaAgents(config));
     await startJavaConfig(config, root, origin ?? config, show);
     return;
   }

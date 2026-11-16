@@ -55,6 +55,8 @@ pub enum Capability {
     FsRead(String),
     /// Write files outside the project under one path.
     FsWrite(String),
+    /// Load a Java agent into the JVM of Java run configurations.
+    JvmAgent,
 }
 
 /// How a grant is presented (plan 4.2).
@@ -90,7 +92,8 @@ impl Capability {
             | Self::Process(_)
             | Self::Lsp(_)
             | Self::FsRead(_)
-            | Self::FsWrite(_) => Risk::High,
+            | Self::FsWrite(_)
+            | Self::JvmAgent => Risk::High,
         }
     }
 
@@ -135,6 +138,7 @@ impl Capability {
             }
             Self::FsRead(path) => format!("Read files under {path}, outside the project"),
             Self::FsWrite(path) => format!("Change files under {path}, outside the project"),
+            Self::JvmAgent => "Runs code inside the Java applications you start".into(),
         }
     }
 
@@ -259,6 +263,7 @@ impl fmt::Display for Capability {
             Self::Lsp(s) => write!(f, "lsp:{s}"),
             Self::FsRead(p) => write!(f, "fs.read:{p}"),
             Self::FsWrite(p) => write!(f, "fs.write:{p}"),
+            Self::JvmAgent => f.write_str("java.agent"),
         }
     }
 }
@@ -335,6 +340,7 @@ impl FromStr for Capability {
             "events" => Self::Events,
             "events.input" => Self::InputEvents,
             "clipboard" => Self::Clipboard,
+            "java.agent" => Self::JvmAgent,
             _ => return Err(format!("unknown capability {s:?}")),
         })
     }

@@ -37,6 +37,7 @@ mod inlay_hints;
 mod install;
 pub mod intellij;
 mod ipc;
+mod java_agents;
 pub mod language_features;
 mod market;
 mod mcp;
@@ -378,6 +379,7 @@ pub struct PluginHost {
     ui: Arc<UiStore>,
     languages: Arc<PluginLanguages>,
     run_detectors: Arc<run_detectors::RunDetectors>,
+    java_agents: Arc<java_agents::JavaAgents>,
     /// `[[contributes.providers]]` of enabled plugins.
     providers: Arc<providers::Providers>,
     navigation: Mutex<navigation::NavigationIndex>,
@@ -456,8 +458,10 @@ impl PluginHost {
         ui.set_index(Some(index.clone()));
         let languages = PluginLanguages::new();
         let run_detectors: Arc<run_detectors::RunDetectors> = Arc::default();
+        let java_agents: Arc<java_agents::JavaAgents> = Arc::default();
         let providers: Arc<providers::Providers> = Arc::default();
-        register_builtin_points(&registry, &ui, &languages, &run_detectors, &providers).map_err(IdeError::internal)?;
+        register_builtin_points(&registry, &ui, &languages, &run_detectors, &java_agents, &providers)
+            .map_err(IdeError::internal)?;
         let pins: Arc<RwLock<HashMap<(String, String), ProgramPin>>> = Arc::default();
         let policy_pins = pins.clone();
         languages.set_process_policy(Arc::new(move |plugin, cap| {
@@ -491,6 +495,7 @@ impl PluginHost {
             ui,
             languages,
             run_detectors,
+            java_agents,
             providers,
             navigation: Mutex::default(),
             endpoints: Mutex::default(),
@@ -1170,6 +1175,7 @@ impl PluginHost {
             }
             self.save_ledger(&ledger);
         }
+        self.pin_java_agent(&plugin, granted && cap == Capability::JvmAgent);
         self.stop(&plugin);
         if !self.state.lock().disabled.contains(id) {
             self.start(&plugin);
@@ -1684,6 +1690,40 @@ impl PluginHost {
         let hard = self.limits.edit_hard;
         let result = actor.call(Some(self.limits.edit_soft), move |rt| f(rt, hard));
         self.finish_provider_call(&plugin, &actor, started, result)
+    }
+
+    /// Adds plugin Java agents to a local JVM application launch. The second
+    /// value is a line for the Run console when an agent was skipped.
+    pub fn apply_java_agents(&self, config: &ide_run::RunConfig) -> (ide_run::RunConfig, Option<String>) {
+        let agents: Vec<_> = self
+            .java_agents
+            .all()
+            .into_iter()
+            .filter(|agent| !self.state.lock().disabled.contains(&agent.plugin))
+            .collect();
+        if agents.is_empty() || !ide_run::java_agents::KINDS.contains(&config.kind.as_str()) {
+            return (config.clone(), None);
+        }
+        if config.extras.target.as_deref().is_some_and(|target| !target.is_empty()) {
+            return (config.clone(), Some("Java agent skipped for a remote project.".into()));
+        }
+        let mut result = config.clone();
+        for agent in agents {
+            let Some(subject) = self.get(&agent.plugin).ok().map(|plugin| plugin.subject()) else { continue };
+            let granted = self.ledger.lock().get(&subject).is_some_and(|grant| grant.has(&Capability::JvmAgent));
+            if !granted {
+                continue;
+            }
+            let path = match self.ledger.lock().check_java_agent(&subject) {
+                Ok(path) => path,
+                Err(error) => return (result, Some(format!("Java agent skipped: {error}"))),
+            };
+            let agent = ide_run::java_agents::JavaAgent { path, args: agent.args };
+            if let Some(next) = ide_run::java_agents::with_agent(&result, &agent) {
+                result = next;
+            }
+        }
+        (result, None)
     }
 
     /// Plugins' `runDetectors`, for [`ide_run::set_external_detection`].
@@ -2621,6 +2661,7 @@ impl PluginHost {
             meta.pending = pending;
             meta.status = if plugin.manifest().wasm.is_some() { PluginStatus::Inactive } else { PluginStatus::Static };
         }
+        self.pin_java_agent(plugin, false);
         let eager = plugin.manifest().activation.contains(&ActivationEvent::StartupFinished)
             && self.startup_finished.load(Ordering::Acquire);
         if eager {
@@ -3033,6 +3074,32 @@ impl PluginHost {
         Some(BinaryGrant { path, hash })
     }
 
+    /// Pins the jar of a granted `java.agent`, so a later launch can verify it
+    /// is still the file the user approved. Called after contributions commit.
+    fn pin_java_agent(&self, plugin: &LoadedPlugin, force: bool) {
+        let subject = plugin.subject();
+        {
+            let ledger = self.ledger.lock();
+            let Some(grant) = ledger.get(&subject) else { return };
+            if !grant.has(&Capability::JvmAgent) {
+                return;
+            }
+            if !force && grant.binaries.contains_key(&Capability::JvmAgent.to_string()) {
+                return;
+            }
+        }
+        let Some(agent) = self.java_agents.for_plugin(plugin.id()) else { return };
+        let Ok(hash) = ledger::file_hash(&agent.path) else {
+            tracing::warn!(plugin = plugin.id(), path = %agent.path.display(), "cannot hash the Java agent");
+            return;
+        };
+        let mut ledger = self.ledger.lock();
+        if ledger.get(&subject).is_some() {
+            ledger.set_java_agent(&subject, &agent.path, hash);
+            self.save_ledger(&ledger);
+        }
+    }
+
     fn info(&self, p: &LoadedPlugin) -> PluginInfo {
         // Before `meta` below: this reads the other plugins' statuses.
         let (depends, dependents, extension_points) = self.relations(p);
@@ -3065,6 +3132,15 @@ impl PluginHost {
             homepage: m.homepage.clone(),
             change_notes: m.change_notes.clone(),
             icon: p.icon.clone(),
+            java_agent: self.java_agents.for_plugin(&m.id).map(|agent| PluginJavaAgent {
+                file_name: agent
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| agent.path.display().to_string()),
+                args: agent.args,
+                approved: self.ledger.lock().check_java_agent(&p.subject()).is_ok(),
+            }),
             source: p.source,
             path: p.dir().to_path_buf().into(),
             enabled: !self.state.lock().disabled.contains(&m.id),
