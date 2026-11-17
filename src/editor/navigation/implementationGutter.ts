@@ -597,6 +597,7 @@ class InheritanceMarker extends GutterMarker {
     const el = document.createElement("div");
     el.className = `${styles.marker} cm-openidea-lineMarker-${this.marker.kind}`;
     el.dataset.kind = this.marker.kind;
+    el.dataset.line = String(this.marker.line);
     el.title = this.marker.tooltip;
     el.setAttribute("role", "button");
     el.setAttribute("aria-label", this.marker.tooltip);

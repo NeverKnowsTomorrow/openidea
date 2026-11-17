@@ -8,3 +8,17 @@
   border-radius: var(--radius-small);
   cursor: pointer;
 }
+
+/* A run/call action appears only while its source line is hovered. */
+.marker[data-hover-only] {
+  opacity: 0;
+  pointer-events: none;
+  color: var(--fg-muted);
+}
+.marker[data-hover-only][data-hover-line] {
+  opacity: 1;
+  pointer-events: auto;
+}
+.marker[data-hover-only] svg {
+  filter: grayscale(1);
+}

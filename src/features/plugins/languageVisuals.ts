@@ -71,6 +71,8 @@ class ActionMarker extends GutterMarker {
     const el = document.createElement("button");
     el.type = "button";
     el.className = `${styles.marker} cm-plugin-gutter-action`;
+    el.dataset.actionLine = String(this.action.line);
+    if (this.action.command === "call-method") el.dataset.hoverOnly = "true";
     el.title = this.action.tooltip;
     el.setAttribute("aria-label", this.action.tooltip);
     el.innerHTML = gutterIconMarkup(markerIcon(this.action.icon)) ?? "";
@@ -97,6 +99,86 @@ const actions = StateField.define<{ pos: number; marker: ActionMarker }[]>({
     return v.map((a) => ({ ...a, pos: mapLineStart(tr, a.pos) }));
   },
 });
+/** Lines where the plugin's Call action replaces the IDE's inheritance marker. */
+function callActionLines(view: EditorView): Set<string> {
+  return new Set(
+    view.state
+      .field(actions)
+      .filter((a) => a.marker.action.command === "call-method")
+      .map((a) => String(a.marker.action.line)),
+  );
+}
+
+/** Cool Request replaces the IDE's inheritance marker on a callable method; keep only our action there. */
+function hideInheritanceMarkersOnCallLines(view: EditorView) {
+  const lines = callActionLines(view);
+  for (const el of view.dom.querySelectorAll<HTMLElement>(
+    ".cm-openidea-lineMarker-implemented, .cm-openidea-lineMarker-overridden, .cm-openidea-lineMarker-implementing, .cm-openidea-lineMarker-overriding",
+  )) {
+    const hidden = lines.has(el.dataset.line ?? "");
+    if ((el.style.display === "none") !== hidden) el.style.display = hidden ? "none" : "";
+  }
+}
+
+/** Show run/call actions only while the pointer is on their source line. */
+const gutterActionHover = ViewPlugin.define((view) => {
+  const apply = (line: number | null) => {
+    for (const button of view.dom.querySelectorAll<HTMLElement>(".cm-plugin-gutter-action[data-hover-only]")) {
+      button.toggleAttribute("data-hover-line", line !== null && Number(button.dataset.actionLine) === line);
+    }
+  };
+  const lineAt = (target: EventTarget | null, event: MouseEvent): number | null => {
+    if (!(target instanceof Node)) return null;
+    const button = target instanceof Element ? target.closest<HTMLElement>(".cm-plugin-gutter-action") : null;
+    if (button?.dataset.actionLine) return Number(button.dataset.actionLine);
+    // Cool Request shows the hint beside the line while the pointer is in the
+    // left gutter, not while it is over the editing area.
+    const gutter = target instanceof Element ? target.closest(".cm-gutters") : null;
+    if (!gutter) return null;
+    try {
+      const content = view.contentDOM.getBoundingClientRect();
+      const pos = view.posAtCoords({ x: content.left + 1, y: event.clientY });
+      return pos === null ? null : view.state.doc.lineAt(pos).number - 1;
+    } catch {
+      return null;
+    }
+  };
+  const move = (event: MouseEvent) => {
+    hideInheritanceMarkersOnCallLines(view);
+    apply(lineAt(event.target, event));
+  };
+  const leave = () => apply(null);
+  const sync = () => hideInheritanceMarkersOnCallLines(view);
+  // If the IDE marker re-renders or the pointer moves straight onto it, never
+  // let its navigation win over the plugin action on the same line.
+  const click = (event: MouseEvent) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const native = target?.closest<HTMLElement>(
+      ".cm-openidea-lineMarker-implemented, .cm-openidea-lineMarker-overridden, .cm-openidea-lineMarker-implementing, .cm-openidea-lineMarker-overriding",
+    );
+    if (!native) return;
+    const line = native.dataset.line;
+    if (!line || !callActionLines(view).has(line)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    view.dom.querySelector<HTMLElement>(`.cm-plugin-gutter-action[data-action-line="${line}"]`)?.click();
+  };
+  const observer = new MutationObserver(sync);
+  observer.observe(view.dom, { childList: true, subtree: true });
+  view.dom.addEventListener("mousemove", move);
+  view.dom.addEventListener("mouseleave", leave);
+  view.dom.addEventListener("click", click, true);
+  sync();
+  return {
+    destroy() {
+      observer.disconnect();
+      view.dom.removeEventListener("mousemove", move);
+      view.dom.removeEventListener("mouseleave", leave);
+      view.dom.removeEventListener("click", click, true);
+    },
+  };
+});
+
 /** In the shared icon area, beside the plugins' line markers. */
 const actionSource = iconAreaSource.of({
   order: 65,
@@ -112,6 +194,7 @@ export function pluginLanguageVisuals(ctx: EditorDocContext): Extension {
     highlights,
     actions,
     actionSource,
+    gutterActionHover,
     ViewPlugin.define(
       (view) =>
         new (class {
@@ -154,6 +237,7 @@ export function pluginLanguageVisuals(ctx: EditorDocContext): Extension {
               this.skipped = !view.dom.isConnected;
               if (this.skipped) return;
               view.dispatch({ effects: [setHighlight.of(deco), setActions.of(placed)] });
+              requestAnimationFrame(() => hideInheritanceMarkersOnCallLines(view));
             } catch (error) {
               console.debug("[plugin language visuals]", error);
             }
